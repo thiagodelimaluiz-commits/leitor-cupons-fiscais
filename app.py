@@ -4,10 +4,15 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from PIL import Image
 import io
-import json
-import google.generativeai as genai
+import re
 
-# Configuração da página (Layout otimizado para celular)
+# Tenta importar easyocr para OCR sem chave de API
+try:
+    import easyocr
+    READER_AVAILABLE = True
+except ImportError:
+    READER_AVAILABLE = False
+
 st.set_page_config(
     page_title="Leitor de Cupons Fiscais",
     page_icon="🧾",
@@ -15,7 +20,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Estilização CSS
 st.markdown("""
 <style>
     .main-header {
@@ -48,86 +52,66 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-header">🧾 Leitor de Cupons Fiscais</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Tire fotos pelo celular e obtenha sua planilha Excel pronta instantaneamente.</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Extração automática de comprovantes e cupons fiscais.</div>', unsafe_allow_html=True)
 
-# Busca segura de Secrets sem quebrar o app
-default_api_key = ""
-try:
-    if "GEMINI_API_KEY" in st.secrets:
-        default_api_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    pass
-
-# Chave de API na barra lateral ou via Secrets do Streamlit
-with st.sidebar:
-    st.header("⚙️ Configurações")
-    api_key = st.text_input("Chave de API do Google Gemini", type="password", value=default_api_key)
-    st.info("💡 Dica: Configure sua GEMINI_API_KEY nos Secrets do Streamlit para salvar a chave permanentemente.")
-
-# Upload com suporte à câmera do celular
+# Upload de imagens
 uploaded_files = st.file_uploader(
     "📸 Tire foto ou selecione imagens dos cupons:", 
     type=["jpg", "jpeg", "png", "webp"], 
     accept_multiple_files=True
 )
 
-def get_working_gemini_model(key):
-    genai.configure(api_key=key)
-    # Busca dinamicamente os modelos ativos na sua conta
-    try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        
-        # Prioridades de escolha
-        for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-2.0-flash-exp']:
-            if preferred in available_models:
-                return genai.GenerativeModel(preferred)
-        
-        if available_models:
-            return genai.GenerativeModel(available_models[0])
-    except Exception:
-        pass
-    
-    # Fallback seguro direto
-    return genai.GenerativeModel('gemini-1.5-flash')
+@st.cache_resource
+def load_ocr_reader():
+    if READER_AVAILABLE:
+        return easyocr.Reader(['pt', 'en'], gpu=False)
+    return None
 
-def extract_data_with_gemini(image_bytes, filename, key):
+def process_image_ocr(image_bytes, filename):
     try:
-        model = get_working_gemini_model(key)
+        reader = load_ocr_reader()
         image = Image.open(io.BytesIO(image_bytes))
         
-        prompt = """
-        Analise a imagem deste cupom fiscal ou recibo e extraia as seguintes informações no formato JSON exato:
-        {
-          "descricao_uso": "Classificação/Categoria breve do gasto (ex: Alimentação, Hardware, Material de Escritório, Combustível, etc)",
-          "fornecedor": "Nome do Estabelecimento / Razão Social",
-          "cidade": "Cidade e UF do estabelecimento (ex: Curitiba/PR)",
-          "data_emissao": "Data de emissão formato DD/MM/AAAA",
-          "horario_emissao": "Horário formato HH:MM:SS (ou HH:MM)",
-          "valor_total": float do valor total (ex: 320.00),
-          "produtos": "Lista legível dos produtos com quantidade e valor unitário"
-        }
-        Responda APENAS o JSON, sem marcações markdown de código.
-        """
-        
-        response = model.generate_content([prompt, image])
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(clean_text)
-        
+        if reader:
+            results = reader.readtext(image_bytes, detail=0)
+            full_text = " ".join(results)
+        else:
+            full_text = ""
+
+        # Extração por Expressões Regulares (Regex)
+        # 1. Procurar valor total (R$ 0,00 ou Total: 0,00)
+        valor_match = re.search(r'(?:TOTAL|VALOR|R\$)\s*[:\.]?\s*R?\$?\s*([\d\.,]+)', full_text, re.IGNORECASE)
+        valor_total = 0.0
+        if valor_match:
+            try:
+                val_str = valor_match.group(1).replace('.', '').replace(',', '.')
+                valor_total = float(val_str)
+            except:
+                valor_total = 0.0
+
+        # 2. Procurar data (DD/MM/AAAA)
+        data_match = re.search(r'(\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4})', full_text)
+        data_emissao = data_match.group(1) if data_match else "Não identificada"
+
+        # 3. Procurar hora (HH:MM:SS)
+        hora_match = re.search(r'(\d{2}:\d{2}:\d{2}|\d{2}:\d{2})', full_text)
+        hora_emissao = hora_match.group(1) if hora_match else "Não identificado"
+
         return {
             "Nome do Arquivo": filename,
-            "Descrição do Uso": data.get("descricao_uso", "Despesa Diversa"),
-            "Fornecedor / Estabelecimento": data.get("fornecedor", "Não identificado"),
-            "Cidade": data.get("cidade", "Não informada"),
-            "Data de Emissão": data.get("data_emissao", "Não informada"),
-            "Horário de Emissão": data.get("horario_emissao", "Não informado"),
-            "Valor Total (R$)": float(data.get("valor_total", 0.0)),
-            "Produtos": data.get("produtos", "Não detalhado")
+            "Descrição do Uso": "Despesa Diversa",
+            "Fornecedor / Estabelecimento": full_text[:40] if full_text else "Estabelecimento Local",
+            "Cidade": "Não identificada",
+            "Data de Emissão": data_emissao,
+            "Horário de Emissão": hora_emissao,
+            "Valor Total (R$)": valor_total,
+            "Produtos": full_text if full_text else "Texto lido do cupom"
         }
     except Exception as e:
         return {
             "Nome do Arquivo": filename,
-            "Descrição do Uso": "Erro na leitura",
-            "Fornecedor / Estabelecimento": f"Erro: {str(e)}",
+            "Descrição do Uso": "Leitura Manual Necessária",
+            "Fornecedor / Estabelecimento": f"Erro OCR: {str(e)}",
             "Cidade": "-",
             "Data de Emissão": "-",
             "Horário de Emissão": "-",
@@ -141,7 +125,6 @@ def generate_excel(df_data):
     ws.title = "Cupons Fiscais"
     ws.views.sheetView[0].showGridLines = True
 
-    # Bloco do Título
     ws.merge_cells("A1:H1")
     title_cell = ws["A1"]
     title_cell.value = "RELATÓRIO DE EXTRAÇÃO DE CUPONS FISCAIS"
@@ -237,21 +220,18 @@ def generate_excel(df_data):
     return output.getvalue()
 
 if uploaded_files:
-    if not api_key:
-        st.warning("⚠️ Forneça uma chave de API do Gemini na barra lateral para processar as imagens.")
-    else:
-        if st.button("🚀 Processar e Gerar Planilha"):
-            extracted_rows = []
-            progress_bar = st.progress(0)
+    if st.button("🚀 Processar e Gerar Planilha"):
+        extracted_rows = []
+        progress_bar = st.progress(0)
+        
+        for idx, file in enumerate(uploaded_files):
+            img_bytes = file.read()
+            data_dict = process_image_ocr(img_bytes, file.name)
+            extracted_rows.append(data_dict)
+            progress_bar.progress((idx + 1) / len(uploaded_files))
             
-            for idx, file in enumerate(uploaded_files):
-                img_bytes = file.read()
-                data_dict = extract_data_with_gemini(img_bytes, file.name, api_key)
-                extracted_rows.append(data_dict)
-                progress_bar.progress((idx + 1) / len(uploaded_files))
-                
-            st.session_state["data_df"] = pd.DataFrame(extracted_rows)
-            st.success("✅ Cupons processados com sucesso!")
+        st.session_state["data_df"] = pd.DataFrame(extracted_rows)
+        st.success("✅ Cupons processados!")
 
 if "data_df" in st.session_state:
     st.markdown("### 📝 Dados Extraídos")
