@@ -71,24 +71,28 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
+def get_working_gemini_model(key):
+    genai.configure(api_key=key)
+    # Busca dinamicamente os modelos ativos na sua conta
+    try:
+        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        
+        # Prioridades de escolha
+        for preferred in ['models/gemini-1.5-flash', 'models/gemini-1.5-pro', 'models/gemini-2.0-flash-exp']:
+            if preferred in available_models:
+                return genai.GenerativeModel(preferred)
+        
+        if available_models:
+            return genai.GenerativeModel(available_models[0])
+    except Exception:
+        pass
+    
+    # Fallback seguro direto
+    return genai.GenerativeModel('gemini-1.5-flash')
+
 def extract_data_with_gemini(image_bytes, filename, key):
     try:
-        genai.configure(api_key=key)
-        
-        # Tentativa de modelos na ordem de preferência/disponibilidade
-        model_names = ['gemini-2.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash']
-        model = None
-        
-        for name in model_names:
-            try:
-                model = genai.GenerativeModel(name)
-                break
-            except Exception:
-                continue
-                
-        if not model:
-            model = genai.GenerativeModel('gemini-2.5-flash')
-
+        model = get_working_gemini_model(key)
         image = Image.open(io.BytesIO(image_bytes))
         
         prompt = """
