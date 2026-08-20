@@ -80,7 +80,7 @@ def extract_data_with_gemini(image_bytes, filename, key):
         try:
             models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
             # Prioriza modelos rápidos/multimodais ativos
-            for m_candidate in ["models/gemini-1.5-flash", "models/gemini-2.0-flash", "models/gemini-1.5-pro"]:
+            for m_candidate in ["models/gemini-3.6-flash"]:
                 if m_candidate in models:
                     selected_model_name = m_candidate
                     break
