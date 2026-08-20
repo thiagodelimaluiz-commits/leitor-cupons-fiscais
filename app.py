@@ -74,8 +74,21 @@ uploaded_files = st.file_uploader(
 def extract_data_with_gemini(image_bytes, filename, key):
     try:
         genai.configure(api_key=key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
         
+        # Tentativa de modelos na ordem de preferência/disponibilidade
+        model_names = ['gemini-2.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash']
+        model = None
+        
+        for name in model_names:
+            try:
+                model = genai.GenerativeModel(name)
+                break
+            except Exception:
+                continue
+                
+        if not model:
+            model = genai.GenerativeModel('gemini-2.5-flash')
+
         image = Image.open(io.BytesIO(image_bytes))
         
         prompt = """
