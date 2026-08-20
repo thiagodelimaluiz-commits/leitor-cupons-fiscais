@@ -50,11 +50,19 @@ st.markdown("""
 st.markdown('<div class="main-header">🧾 Leitor de Cupons Fiscais</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Tire fotos pelo celular e obtenha sua planilha Excel pronta instantaneamente.</div>', unsafe_allow_html=True)
 
+# Busca segura de Secrets sem quebrar o app
+default_api_key = ""
+try:
+    if "GEMINI_API_KEY" in st.secrets:
+        default_api_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    pass
+
 # Chave de API na barra lateral ou via Secrets do Streamlit
 with st.sidebar:
     st.header("⚙️ Configurações")
-    api_key = st.text_input("Chave de API do Google Gemini", type="password", value=st.secrets.get("GEMINI_API_KEY", ""))
-    st.info("💡 Dica: Configure sua GEMINI_API_KEY nos Secrets do Streamlit para não precisar digitar toda vez.")
+    api_key = st.text_input("Chave de API do Google Gemini", type="password", value=default_api_key)
+    st.info("💡 Dica: Configure sua GEMINI_API_KEY nos Secrets do Streamlit para salvar a chave permanentemente.")
 
 # Upload com suporte à câmera do celular
 uploaded_files = st.file_uploader(
